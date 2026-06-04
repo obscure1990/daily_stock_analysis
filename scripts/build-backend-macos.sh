@@ -122,37 +122,91 @@ cp -R "${ROOT_DIR}/dist/stock_analysis" "${ROOT_DIR}/dist/backend/stock_analysis
 
 log "Verifying packaged AlphaSift importability..."
 packaged_root="${ROOT_DIR}/dist/backend/stock_analysis"
-import_checked=0
-for packaged_python_root in "${packaged_root}/_internal" "${packaged_root}"; do
-  if [[ ! -d "${packaged_python_root}" ]]; then
-    continue
-  fi
 
-  if "${PYTHON_BIN}" - "$packaged_python_root" <<'PY'
-import importlib.machinery
+packaged_entry="${packaged_root}/stock_analysis"
+if [[ ! -x "${packaged_entry}" ]]; then
+  echo "ERROR: packaged backend entrypoint not found or not executable: ${packaged_entry}."
+  exit 1
+fi
+
+# 先校验可执行文件可启动（不进入业务流程的参数），再检查冻结产物中是否携带 alphasift.
+if ! "${packaged_entry}" --help >/tmp/alphasift-packaged-help.log 2>&1; then
+  echo "ERROR: packaged backend help startup check failed."
+  cat /tmp/alphasift-packaged-help.log
+  exit 1
+fi
+
+if ! "${PYTHON_BIN}" -S - <<'PY' "${packaged_root}"
+import pathlib
 import sys
+import zipfile
+import importlib
 
-import_root = sys.argv[1]
-package_spec = importlib.machinery.PathFinder.find_spec("alphasift", [import_root])
-if package_spec is None:
-    raise SystemExit(f"Missing alphasift in packaged path: {import_root}")
 
-package_paths = package_spec.submodule_search_locations
-if not package_paths:
-    raise SystemExit(f"Packaged alphasift is not a package: {import_root}")
+def _as_importable_paths(root: pathlib.Path):
+    candidates = [root]
+    internal = root / "_internal"
+    if internal.is_dir():
+        candidates.append(internal)
 
-adapter_spec = importlib.machinery.PathFinder.find_spec("alphasift.dsa_adapter", package_paths)
-if adapter_spec is None:
-    raise SystemExit(f"Missing alphasift.dsa_adapter in packaged path: {import_root}")
+    for base in candidates:
+        yield base
+        for archive_name in ("*.pyz", "*.zip"):
+            for archive in base.glob(archive_name):
+                yield archive
 
-print("OK")
+
+def _can_import_from_candidates(root: pathlib.Path) -> bool:
+    for candidate in _as_importable_paths(root):
+        if not candidate.exists():
+            continue
+
+        baseline_path = list(sys.path)
+        sys.path = [str(candidate)]
+        for key in list(sys.modules):
+            if key == "alphasift" or key.startswith("alphasift."):
+                del sys.modules[key]
+
+        try:
+            importlib.invalidate_caches()
+            importlib.import_module("alphasift.dsa_adapter")
+            print(f"OK (import) from: {candidate}")
+            return True
+        except Exception:
+            continue
+        finally:
+            sys.path = baseline_path
+
+    return False
+
+
+def _zip_contains_alphasift_adapter(root: pathlib.Path) -> bool:
+    for candidate in _as_importable_paths(root):
+        if not candidate.is_file() or candidate.suffix not in {".pyz", ".zip"}:
+            continue
+
+        try:
+            with zipfile.ZipFile(candidate, "r") as zf:
+                for name in zf.namelist():
+                    normalized = name.replace("\\", "/")
+                    if not normalized.startswith("alphasift/"):
+                        continue
+                    if "/dsa_adapter." in normalized or normalized.endswith("alphasift/__init__.py") or normalized.endswith("alphasift/__init__.pyc"):
+                        print(f"OK (archive) from: {candidate}")
+                        return True
+        except Exception:
+            continue
+
+    return False
+
+
+root = pathlib.Path(sys.argv[1]).resolve()
+if not _can_import_from_candidates(root) and not _zip_contains_alphasift_adapter(root):
+    raise SystemExit(f"Missing alphasift adapter in packaged artifact: {root}")
 PY
-  then
-    import_checked=1
-    break
-  fi
-done
-if [[ "${import_checked}" -ne 1 ]]; then
+then
+  echo "Verifying packaged AlphaSift importability..."
+else
   echo "ERROR: packaged backend artifact is missing alphasift modules in ${packaged_root}."
   exit 1
 fi

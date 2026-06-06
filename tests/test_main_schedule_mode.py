@@ -577,25 +577,31 @@ class MainScheduleModeTestCase(unittest.TestCase):
              patch("main._compute_trading_day_filter", return_value=([], "cn", False)), \
              patch("src.core.pipeline.StockAnalysisPipeline", side_effect=build_pipeline), \
              patch("main._prime_daily_market_context", return_value="大盘退潮，高风险，建议观望，仓位上限30%。") as prime_context, \
+             patch("main._run_market_review_with_shared_lock") as run_with_lock, \
              patch("src.core.market_review.run_market_review") as run_market_review:
             main.run_full_analysis(config, args, [])
 
         self.assertEqual(pipeline_kwargs["daily_market_context_allow_generate"], True)
-        prime_context.assert_called_once_with(
-            config,
-            pipeline=pipeline,
-            region="cn",
-            no_market_review=False,
-            allow_generate=True,
+        prime_context.assert_has_calls(
+            [
+                unittest.mock.call(
+                    config,
+                    pipeline=pipeline,
+                    region="cn",
+                    no_market_review=False,
+                    allow_generate=True,
+                ),
+                unittest.mock.call(
+                    config,
+                    pipeline=pipeline,
+                    region="cn",
+                    no_market_review=False,
+                    allow_generate=False,
+                ),
+            ]
         )
-        run_market_review.assert_called_once_with(
-            notifier=pipeline.notifier,
-            analyzer=pipeline.analyzer,
-            search_service=pipeline.search_service,
-            send_notification=True,
-            merge_notification=False,
-            override_region="cn",
-        )
+        run_with_lock.assert_not_called()
+        run_market_review.assert_not_called()
         refresh.assert_called_once_with(config)
         pipeline.run.assert_called_once()
 

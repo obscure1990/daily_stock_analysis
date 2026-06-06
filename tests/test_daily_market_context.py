@@ -105,6 +105,80 @@ def test_reuses_previous_trading_day_history_after_weekend() -> None:
     run_review.assert_not_called()
 
 
+def test_get_context_acquires_market_review_lock_before_generating() -> None:
+    db = MagicMock()
+    db.get_analysis_history.return_value = []
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+    lock_token = object()
+    result = MarketReviewRunResult(
+        report="高风险退潮，仓位上限20%，等待确认。",
+        market_review_payload={
+            "kind": "market_review",
+            "region": "cn",
+            "sections": [
+                {
+                    "key": "overview",
+                    "title": "概览",
+                    "markdown": "高风险退潮，仓位上限20%，等待确认。",
+                }
+            ],
+        },
+    )
+
+    with patch(
+        "src.services.daily_market_context.try_acquire_market_review_lock",
+        return_value=lock_token,
+    ) as acquire_lock, \
+         patch("src.services.daily_market_context.release_market_review_lock") as release_lock, \
+         patch("src.services.daily_market_context.run_market_review", return_value=result) as run_review:
+        context = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            force_refresh=True,
+        )
+
+    assert context is not None
+    assert context.source == "market_review_runtime"
+    acquire_lock.assert_called_once()
+    release_lock.assert_called_once_with(lock_token)
+    run_review.assert_called_once()
+
+
+def test_get_context_skips_generation_when_market_review_lock_is_held() -> None:
+    db = MagicMock()
+    db.get_analysis_history.return_value = []
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+
+    with patch(
+        "src.services.daily_market_context.try_acquire_market_review_lock",
+        return_value=None,
+    ) as acquire_lock, \
+         patch("src.services.daily_market_context.release_market_review_lock") as release_lock, \
+         patch("src.services.daily_market_context.run_market_review") as run_review:
+        context = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            force_refresh=True,
+        )
+
+    assert context is None
+    acquire_lock.assert_called_once()
+    release_lock.assert_not_called()
+    run_review.assert_not_called()
+
+
 def test_force_refresh_runs_market_review_without_notification() -> None:
     db = MagicMock()
     db.get_analysis_history.return_value = [

@@ -632,16 +632,39 @@ def run_full_analysis(
             and not args.no_market_review
             and should_generate_market_context
         ):
-            review_result = _run_market_review_with_shared_lock(
-                config,
-                run_market_review,
-                notifier=pipeline.notifier,
-                analyzer=pipeline.analyzer,
-                search_service=pipeline.search_service,
-                send_notification=not args.no_notify,
-                merge_notification=merge_notification,
-                override_region=market_review_region,
-            )
+            # 避免重叠运行下重复复盘：先复检一次历史上下文（仅读取，不生成）。
+            if not market_context_summary:
+                market_context_summary = _prime_daily_market_context(
+                    config,
+                    pipeline=pipeline,
+                    region=market_review_region,
+                    no_market_review=args.no_market_review,
+                    allow_generate=False,
+                )
+
+            review_result = None
+            if not market_context_summary:
+                review_result = _run_market_review_with_shared_lock(
+                    config,
+                    run_market_review,
+                    notifier=pipeline.notifier,
+                    analyzer=pipeline.analyzer,
+                    search_service=pipeline.search_service,
+                    send_notification=not args.no_notify,
+                    merge_notification=merge_notification,
+                    override_region=market_review_region,
+                )
+
+            # 如果复盘仍未执行成功，再做一次复用历史/缓存读取（防止与并发运行竞态）。
+            if not review_result:
+                market_context_summary = _prime_daily_market_context(
+                    config,
+                    pipeline=pipeline,
+                    region=market_review_region,
+                    no_market_review=args.no_market_review,
+                    allow_generate=False,
+                )
+
             # 如果有结果，赋值给 market_report 用于后续飞书文档生成
             if review_result:
                 market_report = review_result

@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from src.core.market_review_lock import (
+    release_market_review_lock,
+    try_acquire_market_review_lock,
+)
 from src.report_language import normalize_report_language
 from src.storage import DatabaseManager
 
@@ -199,40 +203,53 @@ class DailyMarketContextService:
         analyzer: Any = None,
         search_service: Any = None,
     ) -> Optional[DailyMarketContext]:
+        lock_token = try_acquire_market_review_lock(config)
+        if lock_token is None:
+            # Another process/thread is already refreshing market review context.
+            # Keep fail-open and avoid duplicate execution.
+            return self._load_same_day_history(region=region, target_date=target_date)
+
         try:
-            result = run_market_review(
-                notifier=notifier,
-                analyzer=analyzer,
-                search_service=search_service,
-                send_notification=False,
-                merge_notification=False,
-                override_region=region,
-                return_structured=True,
-                save_report_file=False,
+            try:
+                result = run_market_review(
+                    notifier=notifier,
+                    analyzer=analyzer,
+                    search_service=search_service,
+                    send_notification=False,
+                    merge_notification=False,
+                    override_region=region,
+                    return_structured=True,
+                    save_report_file=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "大盘复盘上下文生成失败，个股分析继续: %s",
+                    exc,
+                    exc_info=True,
+                )
+                return None
+
+            if (
+                hasattr(result, "market_review_payload")
+                and hasattr(result, "report")
+            ):
+                payload = result.market_review_payload or {}
+                fallback_summary = result.report
+            elif isinstance(result, str):
+                payload = {"region": region, "markdown_report": result}
+                fallback_summary = result
+            else:
+                return None
+
+            return self._build_context_from_payload(
+                region=region,
+                trade_date=target_date,
+                payload=payload,
+                source="market_review_runtime",
+                fallback_summary=fallback_summary,
             )
-        except Exception as exc:
-            logger.warning("大盘复盘上下文生成失败，个股分析继续: %s", exc, exc_info=True)
-            return None
-
-        if (
-            hasattr(result, "market_review_payload")
-            and hasattr(result, "report")
-        ):
-            payload = result.market_review_payload or {}
-            fallback_summary = result.report
-        elif isinstance(result, str):
-            payload = {"region": region, "markdown_report": result}
-            fallback_summary = result
-        else:
-            return None
-
-        return self._build_context_from_payload(
-            region=region,
-            trade_date=target_date,
-            payload=payload,
-            source="market_review_runtime",
-            fallback_summary=fallback_summary,
-        )
+        finally:
+            release_market_review_lock(lock_token)
 
     @staticmethod
     def _record_supports_region(payload: Any, record_region: Any, region: str) -> bool:

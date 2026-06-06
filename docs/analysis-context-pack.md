@@ -109,6 +109,8 @@ P3 当时不持久化完整 pack，不新增 API/Web/Bot/Desktop 字段，不改
 
 **范围说明：**`#1381` 仅覆盖后端大盘上下文注入、每日上下文复用控制与保守护栏；本次变更不包含独立 API、Web 流水线阶段页、四阶段日报结构化存储或新增日报表状态字段。
 **兼容性说明：**`#1381` 未改动 `provider/model/base URL` 的运行时迁移语义，不新增数据库或运行时配置表变更；回滚方式为常规发布回滚（撤销本次相关代码），已落库历史 `analysis_context`（含历史 `MARKET` 记录）保持现网可读兼容。
+**验收边界：**当前 PR 只需要覆盖 `main.py` 调度入口（含 schedule/dry-run）、`tests/test_main_schedule_mode.py`，以及 `main` 与 `StockAnalysisPipeline` 的普通分析/Agent 分析大盘上下文注入和 `tests/test_daily_market_context*.py`、`tests/test_daily_market_context_guardrail.py`、`tests/test_agent_executor.py` 的回归；未宣称已交付独立 API、Web 阶段页、四阶段日报结构化持久化或新增状态表能力。
+**兼容性证据：**本轮未新增 provider/model/base_url 迁移逻辑或清理逻辑，相关配置语义仍由既有 `LLM` 配置链路承载，回滚路径同样为常规发布回滚，必要时配合重启/清理 runtime 覆盖项恢复用户保存值（与现网既有说明一致）。
 
 普通分析与 Agent 分析只接收低敏字段：`daily_market_context`（region、trade_date、summary、risk_tags、source、可选 position_cap）和 `daily_market_context_summary` Prompt 段，不传递完整 `market_review_payload`、原始新闻、密钥或通知配置。普通分析 Prompt 在市场阶段段落后、技术面数据前插入大盘摘要；Agent 单体与多 Agent 路径在 market phase 后、pre-fetched 数据前插入同一摘要。Agent 自由聊天只在调用方已经提供 `daily_market_context` / `daily_market_context_summary` 时注入，不为每次聊天自动触发大盘复盘。
 

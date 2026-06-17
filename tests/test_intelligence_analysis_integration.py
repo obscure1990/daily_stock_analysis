@@ -118,6 +118,39 @@ class PersistedIntelligenceAnalysisIntegrationTestCase(unittest.TestCase):
         self.assertIn("SH-prefixed symbol feed", context)
         self.assertIn("SH-suffixed symbol feed", context)
 
+    def test_pipeline_loads_hk_symbol_intelligence_with_plain_code_scope(self) -> None:
+        repo = IntelligenceRepository()
+        now = datetime.now()
+        repo.upsert_items([
+            {
+                "source_name": "hk-symbol-feed",
+                "source_type": "rss",
+                "title": "Plain HK code symbol feed",
+                "summary": "Plain five-digit HK source should match canonical and suffixed analysis codes.",
+                "url": "https://news.example.com/hk-plain-code",
+                "source": "hk-symbol-feed",
+                "published_at": now,
+                "fetched_at": now,
+                "scope_type": "symbol",
+                "scope_value": "00700",
+                "market": "hk",
+            },
+        ])
+
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.config = self.config
+        for code in ("HK00700", "00700.HK"):
+            with self.subTest(code=code):
+                context = pipeline._load_persisted_intelligence_context(
+                    code=code,
+                    stock_name="腾讯控股",
+                    market="hk",
+                )
+
+                self.assertIsNotNone(context)
+                assert context is not None
+                self.assertIn("Plain HK code symbol feed", context)
+
     def test_market_review_merges_persisted_market_intelligence(self) -> None:
         analyzer = MarketAnalyzer(config=self.config, region="cn")
         merged = analyzer._merge_persisted_market_intelligence([])
@@ -163,9 +196,11 @@ class PersistedIntelligenceAnalysisIntegrationTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(payload["news"]), 1)
 
     def test_analysis_evidence_excludes_missing_or_stale_publish_time(self) -> None:
+        self.config.news_max_age_days = 30
+        self.config.news_strategy_profile = "short"
         repo = IntelligenceRepository()
         now = datetime.now()
-        old_time = now - timedelta(days=30)
+        old_time = now - timedelta(days=5)
         repo.upsert_items([
             {
                 "source_name": "symbol-feed",

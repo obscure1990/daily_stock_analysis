@@ -122,6 +122,7 @@ def _symbol_scope_lookup_values(code: str, market: str) -> List[str]:
         digits = normalized_upper[2:]
         trimmed_digits = digits.lstrip("0") or digits
         add_case_variants(normalized_upper)
+        add_case_variants(digits)
         add_case_variants(f"{trimmed_digits}.HK")
         add_case_variants(f"{digits}.HK")
         return values
@@ -2317,7 +2318,7 @@ class StockAnalysisPipeline:
         """Load locally persisted intelligence as fail-open evidence context."""
         try:
             service = IntelligenceService()
-            days = max(1, int(getattr(self.config, "news_max_age_days", 3) or 3))
+            days = max(1, int(self.config.get_effective_news_window_days() or 1))
             collected: list[Dict[str, Any]] = []
             seen_urls: set[str] = set()
             symbol_filters = [

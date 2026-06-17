@@ -1490,7 +1490,7 @@ Market conditions can change quickly. The data above is for reference only and d
             payload = service.list_items(
                 scope_type="market",
                 market=self.region,
-                published_days=max(1, int(getattr(self.config, "news_max_age_days", 3) or 3)),
+                published_days=max(1, int(self.config.get_effective_news_window_days() or 1)),
                 page=1,
                 page_size=6,
             )

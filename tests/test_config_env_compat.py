@@ -101,6 +101,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             "NEWS_INTEL_RETENTION_DAYS": "45",
             "NEWS_INTEL_FETCH_TIMEOUT_SEC": "5.5",
             "NEWS_INTEL_MAX_ITEMS_PER_SOURCE": "25",
+            "NEWSNOW_BASE_URL": "https://newsnow.example.com/",
         })
         with patch.dict(os.environ, news_intel_env, clear=True):
             Config._instance = None
@@ -113,6 +114,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(with_news_intel.news_intel_fetch_timeout_sec, 5.5)
         self.assertEqual(with_news_intel.news_intel_max_items_per_source, 25)
         self.assertEqual(with_news_intel.news_intel_retention_days, 45)
+        self.assertEqual(with_news_intel.newsnow_base_url, "https://newsnow.example.com")
 
     def test_env_example_alphasift_install_spec_matches_trusted_default(self):
         env_example = Path(__file__).resolve().parents[1] / ".env.example"
@@ -290,6 +292,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 "NEWS_INTEL_RETENTION_DAYS": "14",
                 "NEWS_INTEL_FETCH_TIMEOUT_SEC": "12",
                 "NEWS_INTEL_MAX_ITEMS_PER_SOURCE": "75",
+                "NEWSNOW_BASE_URL": "https://newsnow.example.com/base/",
             },
             clear=True,
         ):
@@ -301,6 +304,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(config.news_intel_retention_days, 14)
         self.assertEqual(config.news_intel_fetch_timeout_sec, 12.0)
         self.assertEqual(config.news_intel_max_items_per_source, 75)
+        self.assertEqual(config.newsnow_base_url, "https://newsnow.example.com/base")
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])

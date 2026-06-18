@@ -91,8 +91,8 @@ class IntelligenceApiTestCase(unittest.TestCase):
         templates = self.client.get("/api/v1/intelligence/sources/templates", params={"market": "hk"})
         self.assertEqual(templates.status_code, 200)
         body = templates.json()
-        self.assertEqual(body["total"], 1)
-        self.assertEqual(body["items"][0]["template_id"], "hkex-news")
+        self.assertGreaterEqual(body["total"], 1)
+        self.assertTrue(any(item["template_id"] == "hkex-news" for item in body["items"]))
 
         created = self.client.post(
             "/api/v1/intelligence/sources/templates/hkex-news",
@@ -101,6 +101,22 @@ class IntelligenceApiTestCase(unittest.TestCase):
         self.assertEqual(created.status_code, 200)
         self.assertEqual(created.json()["name"], "hkex-copy")
         self.assertFalse(created.json()["enabled"])
+
+    def test_create_builtin_default_sources_is_idempotent(self) -> None:
+        first = self.client.post("/api/v1/intelligence/sources/defaults", json={"enabled": False})
+        second = self.client.post("/api/v1/intelligence/sources/defaults", json={"enabled": False})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertGreaterEqual(first.json()["created_count"], 5)
+        self.assertEqual(second.json()["created_count"], 0)
+        self.assertEqual(first.json()["total"], second.json()["total"])
+        newsnow_sources = [
+            item["source"] for item in first.json()["items"]
+            if item["source"]["source_type"] == "newsnow"
+        ]
+        self.assertGreaterEqual(len(newsnow_sources), 5)
+        self.assertTrue(all(not item["enabled"] for item in newsnow_sources))
 
     def test_fetch_source_internal_error_is_sanitized(self) -> None:
         create_resp = self.client.post("/api/v1/intelligence/sources", json={"name": "api-feed", "url": "https://feeds.example.com/rss.xml", "source_type": "rss", "scope_type": "market", "market": "cn"})

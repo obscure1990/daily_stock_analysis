@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 import tempfile
 import unittest
@@ -21,6 +22,26 @@ from src.storage import DatabaseManager, IntelligenceItem, INTELLIGENCE_ITEM_NUL
 RSS_FIXTURE = b'<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"><channel>\n<item><title>Policy support lifts AI supply chain</title><link>https://news.example.com/a</link><description>Market-level catalyst with evidence link.</description><pubDate>Wed, 17 Jun 2026 08:00:00 GMT</pubDate></item>\n<item><title>Second item</title><link>https://news.example.com/b</link><description>Second summary.</description></item>\n</channel></rss>'
 NO_URL_LINK_FIXTURE = b'<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"><channel>\n<item><title>Anonymous item</title><description>No link in this item.</description></item>\n</channel></rss>'
 BAD_ITEM_LINK_FIXTURE = b'<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"><channel>\n<item><title>Bad mail link</title><link>mailto:tips@example.com</link><description>Should be skipped.</description></item>\n<item><title>Good public link</title><link>https://news.example.com/good</link><description>Should be saved.</description></item>\n</channel></rss>'
+NEWSNOW_FIXTURE = {
+    "status": "success",
+    "id": "cls-hot",
+    "updatedTime": 1781760000000,
+    "items": [
+        {
+            "id": "1",
+            "title": "A-share AI hardware theme heats up",
+            "url": "https://news.example.com/newsnow-a",
+            "pubDate": 1781760000000,
+            "extra": {"info": "Capital market hot topic from NewsNow."},
+        },
+        {
+            "id": "2",
+            "title": "Second NewsNow item",
+            "url": "https://news.example.com/newsnow-b",
+            "extra": {"hover": "Fallback summary."},
+        },
+    ],
+}
 
 
 class IntelligenceServiceTestCase(unittest.TestCase):
@@ -78,6 +99,15 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         response.headers = {}
         response.raise_for_status.return_value = None
         response.iter_content.return_value = [self._feed_fixture(source_url)]
+        return response
+
+    def _mock_json_response(self, payload=NEWSNOW_FIXTURE, source_url: str = "https://newsnow.example.com/api/s?id=cls-hot"):
+        response = Mock()
+        response.status_code = 200
+        response.url = source_url
+        response.headers = {}
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = [json.dumps(payload).encode("utf-8")]
         return response
 
     def _mock_response_with_redirects(self, source_url: str = "https://feeds.example.com/rss.xml", next_url: str = "https://feeds.example.com/rss.xml"):
@@ -229,11 +259,42 @@ class IntelligenceServiceTestCase(unittest.TestCase):
 
     def test_source_templates_can_create_disabled_source(self) -> None:
         templates = self.service.list_source_templates(market="hk")
-        self.assertEqual(templates["total"], 1)
+        self.assertGreaterEqual(templates["total"], 1)
         created = self.service.create_source_from_template("hkex-news", {"enabled": False, "name": "hkex-template-copy"})
         self.assertEqual(created["name"], "hkex-template-copy")
         self.assertEqual(created["market"], "hk")
         self.assertFalse(created["enabled"])
+
+    def test_newsnow_source_fetches_json_items(self) -> None:
+        source = self.service.create_source({
+            "name": "newsnow-cls",
+            "url": "https://newsnow.example.com/api/s?id=cls-hot",
+            "source_type": "newsnow",
+            "scope_type": "market",
+            "market": "cn",
+        })
+
+        with patch("src.services.intelligence_service.requests.get", return_value=self._mock_json_response()):
+            result = self.service.fetch_source(source["id"])
+
+        self.assertEqual(result["fetched_count"], 2)
+        self.assertEqual(result["saved_count"], 2)
+        items = self.service.list_items(market="cn")
+        self.assertEqual(items["total"], 2)
+        self.assertEqual(items["items"][0]["source_type"], "newsnow")
+        self.assertEqual(result["sample_items"][0]["source"], "newsnow-cls")
+        self.assertEqual(result["sample_items"][0]["summary"], "Capital market hot topic from NewsNow.")
+
+    def test_create_default_sources_is_idempotent(self) -> None:
+        first = self.service.create_default_sources({"enabled": False})
+        second = self.service.create_default_sources({"enabled": False})
+
+        self.assertGreaterEqual(first["created_count"], 5)
+        self.assertEqual(second["created_count"], 0)
+        self.assertEqual(first["total"], second["total"])
+        sources = self.service.list_sources(source_type="newsnow", market="cn")
+        self.assertGreaterEqual(sources["total"], 3)
+        self.assertTrue(all(not item["source"]["enabled"] for item in first["items"]))
 
     def test_same_url_can_be_saved_for_different_scopes(self) -> None:
         market = self.service.create_source({

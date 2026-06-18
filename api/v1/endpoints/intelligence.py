@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.intelligence import (
+    IntelligenceDefaultSourceCreateResponse,
+    IntelligenceDefaultSourcesCreateRequest,
     IntelligenceFetchResponse,
     IntelligenceItemListResponse,
     IntelligenceSourceCreateRequest,
@@ -99,6 +101,20 @@ def create_source_from_template(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Create intelligence source from template failed", exc)
+
+
+@router.post("/sources/defaults", response_model=IntelligenceDefaultSourceCreateResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}}, summary="Create built-in default intelligence sources")
+def create_default_sources(
+    request: IntelligenceDefaultSourcesCreateRequest = IntelligenceDefaultSourcesCreateRequest(),
+) -> IntelligenceDefaultSourceCreateResponse:
+    try:
+        return IntelligenceDefaultSourceCreateResponse(**IntelligenceService().create_default_sources(
+            request.model_dump(exclude_none=True),
+        ))
+    except IntelligenceServiceError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Create default intelligence sources failed", exc)
 
 
 @router.post("/sources/test", response_model=IntelligenceSourceTestResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}}, summary="Dry-run an intelligence source payload")

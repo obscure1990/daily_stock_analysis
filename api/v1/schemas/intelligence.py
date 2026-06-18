@@ -7,7 +7,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-SourceTypeValue = Literal["rss", "atom"]
+SourceTypeValue = Literal["rss", "atom", "newsnow"]
 ScopeTypeValue = Literal["symbol", "market", "sector"]
 MarketValue = Literal["cn", "hk", "us", "global"]
 
@@ -30,6 +30,10 @@ class IntelligenceSourceTemplateCreateRequest(BaseModel):
     scope_value: Optional[str] = Field(None, max_length=64)
     market: Optional[MarketValue] = None
     description: Optional[str] = None
+
+
+class IntelligenceDefaultSourcesCreateRequest(BaseModel):
+    enabled: Optional[bool] = None
 
 
 class IntelligenceSourceItem(BaseModel):
@@ -69,6 +73,17 @@ class IntelligenceSourceListResponse(BaseModel):
 
 class IntelligenceSourceTemplateListResponse(BaseModel):
     items: List[IntelligenceSourceTemplateItem] = Field(default_factory=list)
+    total: int
+
+
+class IntelligenceDefaultSourceResult(BaseModel):
+    created: bool
+    source: IntelligenceSourceItem
+
+
+class IntelligenceDefaultSourceCreateResponse(BaseModel):
+    items: List[IntelligenceDefaultSourceResult] = Field(default_factory=list)
+    created_count: int
     total: int
 
 

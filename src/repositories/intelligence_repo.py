@@ -32,6 +32,12 @@ class IntelligenceRepository:
                 select(IntelligenceSource).where(IntelligenceSource.id == source_id).limit(1)
             ).scalar_one_or_none()
 
+    def get_source_by_name(self, name: str) -> Optional[IntelligenceSource]:
+        with self.db.get_session() as session:
+            return session.execute(
+                select(IntelligenceSource).where(IntelligenceSource.name == name).limit(1)
+            ).scalar_one_or_none()
+
     def list_sources(
         self,
         *,

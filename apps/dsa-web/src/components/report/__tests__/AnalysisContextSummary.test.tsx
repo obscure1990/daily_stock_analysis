@@ -109,7 +109,12 @@ describe('AnalysisContextSummary', () => {
     expect(screen.getByText('来源: 未记录输入来源')).toBeInTheDocument();
     expect(screen.getByText(/上方相关资讯可能来自报告页补充检索或历史持久化/)).toBeInTheDocument();
     expect(screen.getByText(/若需要新闻参与分析，请检查搜索服务配置、网络或接口限流后重新分析/)).toBeInTheDocument();
-    expect(screen.getAllByText(/fundamental_pipeline_failed/).length).toBeGreaterThanOrEqual(1);
+    const fundamentalsBlock = screen.getByText('基本面').closest('.home-subpanel');
+    expect(fundamentalsBlock).not.toBeNull();
+    const fundamentals = within(fundamentalsBlock as HTMLElement);
+    expect(fundamentals.getByText(/缺失原因: 未记录明确缺失原因/)).toBeInTheDocument();
+    expect(fundamentals.queryByText(/缺失原因:.*fundamental_pipeline_failed/)).not.toBeInTheDocument();
+    expect(fundamentals.getByText(/诊断码: fundamental_pipeline_failed/)).toBeInTheDocument();
     expect(screen.getAllByText('新闻结果数: 3').some((item) => item.textContent === '新闻结果数: 3')).toBe(true);
     expect(screen.getAllByText('本次分析输入')[0]).toBeVisible();
   });

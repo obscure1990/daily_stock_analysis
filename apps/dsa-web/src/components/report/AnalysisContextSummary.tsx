@@ -230,6 +230,12 @@ const MISSING_REASON_LABELS: Record<ReportLanguage, Record<string, string>> = {
   },
 };
 
+const UNKNOWN_MISSING_REASON_LABELS: Record<ReportLanguage, string> = {
+  zh: '未记录明确缺失原因',
+  en: 'Missing reason was not recorded',
+  ko: '명확한 누락 사유 기록 없음',
+};
+
 const STATUS_ORDER: AnalysisContextPackBlockStatus[] = [
   'available',
   'missing',
@@ -277,7 +283,7 @@ const formatLimitation = (
 
 const formatMissingReason = (reason: string, language: ReportLanguage): string => {
   const label = MISSING_REASON_LABELS[language][reason];
-  return label || reason;
+  return label || UNKNOWN_MISSING_REASON_LABELS[language];
 };
 
 const guidanceClassName = (status: AnalysisContextPackBlockStatus): string => {

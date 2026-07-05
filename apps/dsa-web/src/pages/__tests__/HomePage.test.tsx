@@ -493,6 +493,23 @@ describe('HomePage', () => {
           items: [],
         });
       }
+      if ('startDate' in params) {
+        return Promise.resolve({
+          total: 1,
+          page: 1,
+          limit: 100,
+          items: [{
+            id: 12,
+            queryId: 'q-aapl',
+            stockCode: 'AAPL',
+            stockName: 'Apple',
+            reportType: 'detailed' as const,
+            sentimentScore: 68,
+            operationAdvice: '中性',
+            createdAt: `${todayInShanghai}T09:20:00`,
+          }],
+        });
+      }
 
       return Promise.resolve({
         total: 0,
@@ -593,6 +610,90 @@ describe('HomePage', () => {
     expect(await screen.findByLabelText('今日已分析')).toBeInTheDocument();
   });
 
+  it('waits for stock-bar load before launching watchlist fallback lookups', async () => {
+    let resolveStockBar!: (response: Awaited<ReturnType<typeof historyApi.getStockBarList>>) => void;
+    const stockBarPromise = new Promise<Awaited<ReturnType<typeof historyApi.getStockBarList>>>((resolve) => {
+      resolveStockBar = resolve;
+    });
+
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['AAPL']);
+    vi.mocked(historyApi.getStockBarList).mockReturnValue(stockBarPromise);
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '自选' }));
+
+    expect(await screen.findByLabelText('确认今日状态中')).toBeInTheDocument();
+    expect(
+      vi.mocked(historyApi.getList).mock.calls.some(([params]) => params?.stockCode === 'AAPL'),
+    ).toBe(false);
+
+    await act(async () => {
+      resolveStockBar({
+        total: 0,
+        items: [],
+      });
+      await stockBarPromise;
+    });
+
+    await waitFor(() => {
+      expect(historyApi.getList).toHaveBeenCalledWith({ stockCode: 'AAPL', limit: 1 });
+    });
+  });
+
+  it('keeps failed fallback history lookups out of pending submission', async () => {
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['AAPL']);
+    vi.mocked(historyApi.getStockBarList).mockResolvedValue({
+      total: 1,
+      items: [{
+        id: 11,
+        stockCode: '600519',
+        stockName: '贵州茅台',
+        reportType: 'detailed',
+        sentimentScore: 72,
+        operationAdvice: '观察',
+        analysisCount: 2,
+        lastAnalysisTime: '2026-03-18T22:00:00',
+      }],
+    });
+    vi.mocked(historyApi.getList).mockImplementation((params: { stockCode?: string; limit?: number } = {}) => {
+      if (params.stockCode === 'AAPL') {
+        return Promise.reject(new Error('temporary history failure'));
+      }
+
+      return Promise.resolve({
+        total: 0,
+        page: 1,
+        limit: params.limit ?? 20,
+        items: [],
+      });
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '自选' }));
+
+    expect(await screen.findByLabelText('今日状态未知')).toBeInTheDocument();
+    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    expect(analyzePendingButton).toBeDisabled();
+    fireEvent.click(analyzePendingButton);
+    expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
+  });
+
   it('loads the Today ranking from paginated history instead of the capped stock bar', async () => {
     const todayInShanghai = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
     vi.mocked(historyApi.getStockBarList).mockResolvedValue({
@@ -682,6 +783,46 @@ describe('HomePage', () => {
     expect(
       highScoreButton.compareDocumentPosition(lowerScoreButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it('shows an error instead of capped stock-bar fallback when Today ranking load fails', async () => {
+    const todayInShanghai = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+    vi.mocked(historyApi.getStockBarList).mockResolvedValue({
+      total: 1,
+      items: [{
+        id: 11,
+        stockCode: 'AAPL',
+        stockName: 'Apple',
+        reportType: 'detailed',
+        sentimentScore: 72,
+        operationAdvice: '观察',
+        analysisCount: 2,
+        lastAnalysisTime: `${todayInShanghai}T10:00:00`,
+      }],
+    });
+    vi.mocked(historyApi.getList).mockImplementation((params: { startDate?: string; endDate?: string } = {}) => {
+      if (params.startDate === todayInShanghai && params.endDate === todayInShanghai) {
+        return Promise.reject(new Error('today history failed'));
+      }
+
+      return Promise.resolve({
+        total: 0,
+        page: 1,
+        limit: 20,
+        items: [],
+      });
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '今日' }));
+
+    expect(await screen.findByText('今日排行加载失败')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Apple/ })).not.toBeInTheDocument();
   });
 
   it('removes the MARKET stock bar item after deleting market review history', async () => {

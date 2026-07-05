@@ -68,6 +68,7 @@ type BatchAnalyzeStatus = {
 type WatchlistHistoryLookupState = {
   signature: string;
   settledKeys: Set<string>;
+  failedKeys: Set<string>;
 };
 
 function getShanghaiDateKey(value?: string | null): string {
@@ -188,11 +189,15 @@ const HomePage: React.FC = () => {
   const [watchlistHistoryLookupState, setWatchlistHistoryLookupState] = useState<WatchlistHistoryLookupState>({
     signature: '',
     settledKeys: new Set(),
+    failedKeys: new Set(),
   });
   const [todayHistoryItems, setTodayHistoryItems] = useState<StockBarItem[]>([]);
   const [isLoadingTodayAnalysisItems, setIsLoadingTodayAnalysisItems] = useState(false);
+  const [todayAnalysisLoadFailed, setTodayAnalysisLoadFailed] = useState(false);
+  const [isStockBarInitialLoadSettled, setIsStockBarInitialLoadSettled] = useState(false);
   const duplicateBannerTimer = useRef<number | null>(null);
   const marketReviewPollTimer = useRef<number | null>(null);
+  const stockBarLoadStartedRef = useRef(false);
   const dashboardScrollRef = useRef<HTMLElement | null>(null);
   const strategyMenuRef = useRef<HTMLDivElement | null>(null);
   const strategyButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -505,6 +510,16 @@ const HomePage: React.FC = () => {
     removeTask,
   });
 
+  useEffect(() => {
+    if (isLoadingStockBar) {
+      stockBarLoadStartedRef.current = true;
+      return;
+    }
+    if (stockBarLoadStartedRef.current || stockBarItems.length > 0) {
+      setIsStockBarInitialLoadSettled(true);
+    }
+  }, [isLoadingStockBar, stockBarItems.length]);
+
   const watchlistState = useWatchlist();
   const watchlistCodesByNormalized = useMemo(() => {
     const codesByNormalized = new Map<string, string>();
@@ -532,9 +547,15 @@ const HomePage: React.FC = () => {
     return itemsByCode;
   }, [stockBarItems]);
 
+  const canLookupWatchlistHistory = !isLoadingStockBar && isStockBarInitialLoadSettled;
+
   const watchlistMissingHistoryEntries = useMemo(
-    () => watchlistCodesByNormalized.filter(([key]) => !stockBarItemByCode.has(key)),
-    [stockBarItemByCode, watchlistCodesByNormalized],
+    () => (
+      canLookupWatchlistHistory
+        ? watchlistCodesByNormalized.filter(([key]) => !stockBarItemByCode.has(key))
+        : []
+    ),
+    [canLookupWatchlistHistory, stockBarItemByCode, watchlistCodesByNormalized],
   );
 
   const watchlistMissingHistorySignature = useMemo(
@@ -543,27 +564,33 @@ const HomePage: React.FC = () => {
   );
 
   useEffect(() => {
+    if (!canLookupWatchlistHistory) {
+      setWatchlistHistoryItemsByCode(new Map());
+      setWatchlistHistoryLookupState({ signature: '', settledKeys: new Set(), failedKeys: new Set() });
+      return undefined;
+    }
+
     const missingCodes = watchlistMissingHistoryEntries.map(([, code]) => code);
     const missingKeys = watchlistMissingHistoryEntries.map(([key]) => key);
     const currentSignature = watchlistMissingHistorySignature;
 
     if (missingCodes.length === 0) {
       setWatchlistHistoryItemsByCode(new Map());
-      setWatchlistHistoryLookupState({ signature: '', settledKeys: new Set() });
+      setWatchlistHistoryLookupState({ signature: '', settledKeys: new Set(), failedKeys: new Set() });
       return;
     }
 
     let isCanceled = false;
-    setWatchlistHistoryLookupState({ signature: currentSignature, settledKeys: new Set() });
+    setWatchlistHistoryLookupState({ signature: currentSignature, settledKeys: new Set(), failedKeys: new Set() });
     void (async () => {
       try {
         const results = await Promise.all(
           missingCodes.map(async (code) => {
             try {
               const response = await historyApi.getList({ stockCode: code, limit: 1 });
-              return response.items[0] ? [code, response.items[0]] as const : null;
+              return { code, item: response.items[0] ?? null, failed: false };
             } catch {
-              return null;
+              return { code, item: null, failed: true };
             }
           }),
         );
@@ -573,22 +600,34 @@ const HomePage: React.FC = () => {
         }
 
         const next = new Map<string, StockBarItem>();
+        const failedKeys = new Set<string>();
         for (const entry of results) {
-          if (!entry) {
+          const key = getStockCodeKey(entry.code);
+          if (!key) {
             continue;
           }
-          const [code, item] = entry;
-          const key = getStockCodeKey(code);
-          if (key) {
-            next.set(key, toStockBarItemFromHistoryItem(item));
+          if (entry.failed) {
+            failedKeys.add(key);
+            continue;
+          }
+          if (entry.item) {
+            next.set(key, toStockBarItemFromHistoryItem(entry.item));
           }
         }
         setWatchlistHistoryItemsByCode(next);
-        setWatchlistHistoryLookupState({ signature: currentSignature, settledKeys: new Set(missingKeys) });
+        setWatchlistHistoryLookupState({
+          signature: currentSignature,
+          settledKeys: new Set(missingKeys),
+          failedKeys,
+        });
       } catch {
         if (!isCanceled) {
           setWatchlistHistoryItemsByCode(new Map());
-          setWatchlistHistoryLookupState({ signature: currentSignature, settledKeys: new Set(missingKeys) });
+          setWatchlistHistoryLookupState({
+            signature: currentSignature,
+            settledKeys: new Set(missingKeys),
+            failedKeys: new Set(missingKeys),
+          });
         }
       }
     })();
@@ -596,7 +635,7 @@ const HomePage: React.FC = () => {
     return () => {
       isCanceled = true;
     };
-  }, [watchlistMissingHistoryEntries, watchlistMissingHistorySignature]);
+  }, [canLookupWatchlistHistory, watchlistMissingHistoryEntries, watchlistMissingHistorySignature]);
 
   const clearMarketReviewState = useCallback(() => {
     stopMarketReviewPolling();
@@ -864,15 +903,18 @@ const HomePage: React.FC = () => {
 
     let active = true;
     setIsLoadingTodayAnalysisItems(true);
+    setTodayAnalysisLoadFailed(false);
     void getTodayAnalysisItems(todayDateKey)
       .then((items) => {
         if (active) {
           setTodayHistoryItems(items);
+          setTodayAnalysisLoadFailed(false);
         }
       })
       .catch(() => {
         if (active) {
           setTodayHistoryItems([]);
+          setTodayAnalysisLoadFailed(true);
         }
       })
       .finally(() => {
@@ -909,10 +951,19 @@ const HomePage: React.FC = () => {
       const latestItem = key
         ? stockBarItemByCode.get(key) ?? watchlistHistoryItemsByCode.get(key)
         : undefined;
+      const isMissingFromStockBar = Boolean(key && !stockBarItemByCode.has(key));
+      const isTodayStatusUnknown = Boolean(
+        isMissingFromStockBar
+        && canLookupWatchlistHistory
+        && watchlistHistoryLookupState.signature === watchlistMissingHistorySignature
+        && watchlistHistoryLookupState.failedKeys.has(key),
+      );
       const isTodayStatusLoading = Boolean(
-        key
-        && !stockBarItemByCode.has(key)
+        isMissingFromStockBar
+        && !isTodayStatusUnknown
         && (
+          !canLookupWatchlistHistory
+          ||
           watchlistHistoryLookupState.signature !== watchlistMissingHistorySignature
           || !watchlistHistoryLookupState.settledKeys.has(key)
         ),
@@ -920,13 +971,15 @@ const HomePage: React.FC = () => {
       return {
         code,
         latestItem,
-        analyzedToday: !isTodayStatusLoading && getShanghaiDateKey(latestItem?.lastAnalysisTime) === todayDateKey,
+        analyzedToday: !isTodayStatusLoading && !isTodayStatusUnknown && getShanghaiDateKey(latestItem?.lastAnalysisTime) === todayDateKey,
         isTodayStatusLoading,
+        isTodayStatusUnknown,
         activeTask: key ? activeTaskByCode.get(key) : undefined,
       };
     })
   ), [
     activeTaskByCode,
+    canLookupWatchlistHistory,
     stockBarItemByCode,
     todayDateKey,
     watchlistHistoryItemsByCode,
@@ -941,19 +994,17 @@ const HomePage: React.FC = () => {
   );
 
   const pendingWatchlistCodes = useMemo(
-    () => watchlistRows.filter((row) => !row.analyzedToday && !row.isTodayStatusLoading).map((row) => row.code),
+    () => watchlistRows
+      .filter((row) => !row.analyzedToday && !row.isTodayStatusLoading && !row.isTodayStatusUnknown)
+      .map((row) => row.code),
     [watchlistRows],
   );
 
-  const watchlistTodayStatusLoading = useMemo(
-    () => watchlistRows.some((row) => row.isTodayStatusLoading),
+  const watchlistTodayStatusBlocked = useMemo(
+    () => watchlistRows.some((row) => row.isTodayStatusLoading || row.isTodayStatusUnknown),
     [watchlistRows],
   );
 
-  const watchlistHistoryItems = useMemo(
-    () => Array.from(watchlistHistoryItemsByCode.values()),
-    [watchlistHistoryItemsByCode],
-  );
   const todayAnalysisItems = useMemo(() => {
     const itemsById = new Map<number, StockBarItem>();
     const addItem = (item: StockBarItem) => {
@@ -969,12 +1020,6 @@ const HomePage: React.FC = () => {
     for (const item of todayHistoryItems) {
       addItem(item);
     }
-    for (const item of stockBarItems) {
-      addItem(item);
-    }
-    for (const item of watchlistHistoryItems) {
-      addItem(item);
-    }
 
     return Array.from(itemsById.values())
       .sort((left, right) => {
@@ -987,13 +1032,13 @@ const HomePage: React.FC = () => {
         const rightTime = getShanghaiTimeValue(right.lastAnalysisTime);
         return rightTime - leftTime;
       });
-  }, [stockBarItems, todayDateKey, todayHistoryItems, watchlistHistoryItems]);
+  }, [todayDateKey, todayHistoryItems]);
 
   const handleAnalyzeWatchlist = useCallback(async (mode: WatchlistAnalyzeMode) => {
-    if (mode === 'pending' && watchlistTodayStatusLoading) {
+    if (mode === 'pending' && watchlistTodayStatusBlocked) {
       setBatchAnalyzeStatus({
         variant: 'warning',
-        message: t('watchlist.pendingStatusLoading'),
+        message: t('watchlist.pendingStatusUnavailable'),
       });
       return;
     }
@@ -1066,7 +1111,7 @@ const HomePage: React.FC = () => {
     refreshActiveTasks,
     selectedAnalysisSkills,
     t,
-    watchlistTodayStatusLoading,
+    watchlistTodayStatusBlocked,
     watchlistState.watchlistCodes,
   ]);
 
@@ -1116,6 +1161,7 @@ const HomePage: React.FC = () => {
           batchStatus={batchAnalyzeStatus}
           todayItems={todayAnalysisItems}
           isLoadingTodayItems={isLoadingTodayAnalysisItems}
+          todayLoadError={todayAnalysisLoadFailed}
           watchlistAnalyzedTodayCount={watchlistAnalyzedTodayCount}
           historyItems={mergedStockBarItems}
           isLoadingHistory={isLoadingStockBar}
@@ -1138,6 +1184,7 @@ const HomePage: React.FC = () => {
       isDeletingStock,
       isLoadingStockBar,
       isLoadingTodayAnalysisItems,
+      todayAnalysisLoadFailed,
       mergedStockBarItems,
       openTaskRunFlow,
       selectedReport?.meta.id,
